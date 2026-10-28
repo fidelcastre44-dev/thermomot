@@ -206,15 +206,18 @@ function makeGame(targetWord){
     let s=0, o=i*DIM; for(let k=0;k<DIM;k++) s += VEC[o+k]*VEC[to+k];
     sims[i] = s/(NORM[i]*NORM[t]);
   }
-  const order = Array.from({length:n}, (_, i) => i).sort((a,b) => sims[b]-sims[a]);
+  const order = [];
+  for(let i=0;i<n;i++) if(!LEX.lem || LEX.lem[i] < 0) order.push(i);
+  order.sort((a,b) => sims[b]-sims[a]);
   const rank = new Map(); for(let r=0;r<1000;r++) rank.set(order[r], 1000-r);
   return { target: targetWord, t, sims, rank };
 }
 function lookup(raw){
   const w = raw.trim().toLowerCase().replace(/[’']/g,"'");
   if(!w) return null;
-  if(INDEX.has(w)) return INDEX.get(w);
-  const l = strip(w); return LOOSE.has(l) ? LOOSE.get(l) : -1;
+  let i = INDEX.has(w) ? INDEX.get(w) : (LOOSE.has(strip(w)) ? LOOSE.get(strip(w)) : -1);
+  if(i >= 0 && LEX.lem && LEX.lem[i] >= 0) i = LEX.lem[i];
+  return i;
 }
 function score(game, i){
   const temp = Math.round(game.sims[i]*10000)/100;
