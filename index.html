@@ -88,8 +88,13 @@ input[type=text]:focus{outline:none;border-color:var(--ink)}
 .banner strong{font-family:var(--f-display);font-size:1.3rem}
 .countdown{font:700 4rem var(--f-display);text-align:center;color:var(--hot);padding:30px 0}
 .score{font:600 .9rem var(--f-mono);color:var(--muted);text-align:center}
+.levels{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.levels button{font:500 .9rem var(--f-body);color:var(--muted);background:var(--surface);border:1.5px solid var(--line);border-radius:12px;padding:9px 6px;cursor:pointer;display:flex;align-items:baseline;justify-content:center;gap:6px}
+.levels button b{font:600 1rem var(--f-mono);color:var(--ink)}
+.levels button[aria-pressed="true"]{border-color:var(--ink);color:var(--ink);background:var(--bg)}
+.levels button:focus-visible{outline:2px solid var(--warm);outline-offset:2px}
 .loading{color:var(--muted);text-align:center;padding:40px 0}
-.legend{font-size:.82rem;color:var(--muted)}
+.legend{font-size:.82rem;color:var(--muted);margin:0}
 @media (max-width:420px){.row{grid-template-columns:2rem 1fr 4.2rem 1.4rem 4.6rem;gap:6px;padding:8px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
@@ -101,7 +106,7 @@ input[type=text]:focus{outline:none;border-color:var(--ink)}
   <header>
     <h1>Thermo<span>mot</span></h1>
     <div class="tabs" role="tablist">
-      <button id="tab-solo" role="tab" aria-selected="true">Mot du jour</button>
+      <button id="tab-solo" role="tab" aria-selected="true">Solo</button>
       <button id="tab-duel" role="tab" aria-selected="false">Duel</button>
     </div>
   </header>
@@ -111,6 +116,11 @@ input[type=text]:focus{outline:none;border-color:var(--ink)}
   <!-- SOLO -->
   <section id="solo" hidden>
     <div style="display:flex;flex-direction:column;gap:12px">
+      <div class="levels" id="solo-levels" role="group" aria-label="Niveau de difficulté">
+        <button data-level="1" aria-pressed="false"><b>1</b> Facile</button>
+        <button data-level="2" aria-pressed="false"><b>2</b> Moyen</button>
+        <button data-level="3" aria-pressed="false"><b>3</b> Difficile</button>
+      </div>
       <p class="sub" id="solo-sub"></p>
       <div class="bar">
         <input type="text" id="solo-in" placeholder="Tape un mot…" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go">
@@ -121,8 +131,10 @@ input[type=text]:focus{outline:none;border-color:var(--ink)}
       <div class="list" id="solo-list"></div>
       <div class="inline">
         <button class="btn ghost" id="solo-random">Partie libre</button>
+        <button class="btn ghost" id="solo-daily">Mot du jour</button>
         <button class="btn ghost" id="solo-giveup">Abandonner</button>
       </div>
+      <p class="legend">Chaque niveau a son mot du jour. En partie libre et en duel, un mot déjà joué ne revient pas avant que toute la liste du niveau y soit passée.</p>
       <p class="legend">La température mesure la proximité de sens avec le mot secret. La jauge en ‰ s'affiche quand ton mot fait partie des 1000 plus proches : 1000‰, c'est le mot lui-même.</p>
     </div>
   </section>
@@ -153,6 +165,11 @@ input[type=text]:focus{outline:none;border-color:var(--ink)}
           <p class="sub" style="text-align:center">Code du duel, à donner à ton adversaire</p>
           <div class="code" id="duel-code-show"></div>
           <p class="sub" id="wait-status" style="text-align:center"></p>
+          <div class="levels" id="duel-levels" role="group" aria-label="Niveau de difficulté">
+        <button data-level="1" aria-pressed="false"><b>1</b> Facile</button>
+        <button data-level="2" aria-pressed="false"><b>2</b> Moyen</button>
+        <button data-level="3" aria-pressed="false"><b>3</b> Difficile</button>
+      </div>
           <button class="btn" id="duel-start" disabled>Lancer la manche</button>
           <button class="btn ghost" id="duel-leave">Quitter</button>
         </div>
@@ -274,28 +291,66 @@ function guessInto(game, guesses, raw, msgEl){
 
 /* ---------- SOLO ---------- */
 const EPOCH = Date.UTC(2026, 9, 28);
+const LEVEL_NAMES = ['', 'Facile', 'Moyen', 'Difficile'];
 function todayKey(){ const d = new Date(); return `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}` }
 function dayIndex(){ const d = new Date(); return Math.floor((Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - EPOCH)/86400000) }
-let solo = null;
+const levelList = L => LEX.levels ? LEX.levels[L-1] : LEX.targets;
+
+// Words already played on this device, per level (indices into the level list).
+function seenSet(L){ return new Set(store.get('thermo-seen', {})[L] || []) }
+function markSeen(L, word){
+  const i = levelList(L).indexOf(word); if(i < 0) return;
+  const all = store.get('thermo-seen', {}); const s = new Set(all[L] || []); s.add(i);
+  all[L] = [...s]; store.set('thermo-seen', all);
+}
+function seenBits(L){
+  const n = levelList(L).length, bytes = new Uint8Array(Math.ceil(n/8));
+  for(const i of seenSet(L)) if(i < n) bytes[i>>3] |= 1 << (i&7);
+  let s = ''; bytes.forEach(b => s += String.fromCharCode(b)); return btoa(s);
+}
+function bitsToSet(b64){
+  const out = new Set(); if(typeof b64 !== 'string') return out;
+  try { const s = atob(b64); for(let k=0;k<s.length;k++){ const b = s.charCodeAt(k); for(let j=0;j<8;j++) if(b & (1<<j)) out.add(k*8+j) } } catch(e){}
+  return out;
+}
+// Pick a word index nobody here has played yet; when a level runs out, start it over.
+function pickIndex(L, others = []){
+  const list = levelList(L), mine = seenSet(L);
+  let pool = []; for(let i=0;i<list.length;i++) if(!mine.has(i) && !others.some(o => o.has(i))) pool.push(i);
+  if(!pool.length){ pool = []; for(let i=0;i<list.length;i++) if(!mine.has(i)) pool.push(i) }
+  if(!pool.length){ const all = store.get('thermo-seen', {}); all[L] = []; store.set('thermo-seen', all); pool = list.map((_, i) => i) }
+  return pool[Math.floor(Math.random()*pool.length)];
+}
+
+let solo = null, soloLevel = store.get('thermo-level', 1);
+function soloKey(L){ return 'thermo-solo-' + L }
 function startSolo(mode){
-  let word, label;
+  const L = soloLevel, list = levelList(L);
+  const saved = store.get(soloKey(L), null);
+  let word, label, key;
+  if(mode === 'resume') mode = saved && saved.key === 'free' ? 'free' : 'daily';
   if(mode === 'daily'){
-    const idx = ((dayIndex() % LEX.targets.length) + LEX.targets.length) % LEX.targets.length;
-    word = LEX.targets[idx]; label = `Mot du jour n°${dayIndex()+1}`;
+    word = list[((dayIndex() % list.length) + list.length) % list.length];
+    label = `Mot du jour · Niveau ${L} (${LEVEL_NAMES[L]})`; key = todayKey();
   } else {
-    word = LEX.targets[Math.floor(Math.random()*LEX.targets.length)]; label = 'Partie libre';
+    key = 'free';
+    word = (saved && saved.key === 'free' && list.includes(saved.word)) ? saved.word : list[pickIndex(L)];
+    label = `Partie libre · Niveau ${L} (${LEVEL_NAMES[L]})`;
   }
-  const saved = store.get('thermo-solo', null);
-  const key = mode === 'daily' ? todayKey() : 'free';
-  solo = { mode, key, label, game: makeGame(mode==='free' && saved && saved.key==='free' && saved.word ? saved.word : word), guesses: [], over: false };
-  if(saved && saved.key === key && saved.word === solo.game.target){
+  solo = { mode, key, label, L, game: makeGame(word), guesses: [], over: false };
+  markSeen(L, word);
+  if(saved && saved.key === key && saved.word === word){
     for(const w of saved.words){ const i = INDEX.get(w); if(i !== undefined) solo.guesses.push({ ...score(solo.game, i), n: solo.guesses.length+1 }) }
     solo.over = !!saved.over || solo.guesses.some(g => g.found);
   }
-  renderSolo();
+  saveSolo(); renderSolo();
 }
-function saveSolo(){ store.set('thermo-solo', { key: solo.key, word: solo.game.target, words: solo.guesses.map(g => g.word), over: solo.over }) }
+function saveSolo(){ store.set(soloKey(solo.L), { key: solo.key, word: solo.game.target, words: solo.guesses.map(g => g.word), over: solo.over }) }
+function renderLevelPicker(el, current){
+  el.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', +b.dataset.level === current));
+}
 function renderSolo(){
+  renderLevelPicker($('solo-levels'), soloLevel);
   $('solo-sub').textContent = `${solo.label} · ${solo.guesses.length} essai${solo.guesses.length>1?'s':''}`;
   renderList($('solo-list'), solo.guesses);
   const b = $('solo-banner'); b.innerHTML = '';
@@ -306,6 +361,7 @@ function renderSolo(){
     b.querySelector('span').textContent = found ? `en ${found.n} essai${found.n>1?'s':''}` : 'Retente ta chance avec une partie libre.';
   }
   $('solo-in').disabled = $('solo-go').disabled = $('solo-giveup').disabled = solo.over;
+  $('solo-daily').hidden = solo.mode === 'daily';
 }
 function soloGuess(){
   if(solo.over) return;
@@ -315,14 +371,18 @@ function soloGuess(){
 }
 $('solo-go').onclick = soloGuess;
 $('solo-in').addEventListener('keydown', e => { if(e.key === 'Enter') soloGuess() });
-$('solo-random').onclick = () => { store.set('thermo-solo', null); startSolo('free') };
+$('solo-random').onclick = () => { store.set(soloKey(soloLevel), null); startSolo('free') };
+$('solo-daily').onclick = () => { const s = store.get(soloKey(soloLevel), null); if(s && s.key === 'free') store.set(soloKey(soloLevel), null); startSolo('daily') };
+$('solo-levels').addEventListener('click', e => {
+  const b = e.target.closest('button[data-level]'); if(!b) return;
+  soloLevel = +b.dataset.level; store.set('thermo-level', soloLevel); $('solo-msg').textContent = ''; startSolo('resume');
+});
 let giveupArmed = false;
 $('solo-giveup').onclick = () => {
   if(!giveupArmed){ giveupArmed = true; $('solo-giveup').textContent = 'Sûr ? Touche encore'; setTimeout(() => { giveupArmed = false; $('solo-giveup').textContent = 'Abandonner' }, 3000); return }
   giveupArmed = false; $('solo-giveup').textContent = 'Abandonner';
   solo.over = true; saveSolo(); renderSolo();
 };
-
 
 /* ---------- live connection (public MQTT broker) ---------- */
 function mqttRoomApi(){
@@ -358,12 +418,12 @@ function mqttRoomApi(){
 }
 
 /* ---------- DUEL ---------- */
-let roomChecked = false, roomApi = null, room = null, code = '', me = { name:'', round:0, best:null, prog:0, count:0, foundMs:null, wins:0 };
+let roomChecked = false, roomApi = null, room = null, code = '', me = { name:'', round:0, level:1, wi:0, startTs:0, best:null, prog:0, count:0, foundMs:null, wins:0 };
+let duelLevel = store.get('thermo-duel-level', 1);
 let duel = { game:null, guesses:[], phase:'lobby', startedAt:0, result:null, unsub:null };
 function hash(s){ let h = 2166136261; for(const c of s){ h ^= c.charCodeAt(0); h = Math.imul(h, 16777619) } return h >>> 0 }
-function wordFor(c, r){ return LEX.targets[hash(c + ':' + r) % LEX.targets.length] }
 function opponents(){ return room ? room.peers().filter(p => !p.isMe && p.kind === 'viewer' && p.presence && p.presence.name && Date.now() - (+p.presence.ts || 0) < 120000) : [] }
-function pushPresence(){ if(room) room.presence({ ts: Date.now(), name: me.name, round: me.round, best: me.best, prog: me.prog, count: me.count, foundMs: me.foundMs, wins: me.wins }).catch(()=>{}) }
+function pushPresence(){ if(room) room.presence({ ts: Date.now(), name: me.name, round: me.round, level: me.level, wi: me.wi, startTs: me.startTs, seen: { 1: seenBits(1), 2: seenBits(2), 3: seenBits(3) }, best: me.best, prog: me.prog, count: me.count, foundMs: me.foundMs, wins: me.wins }).catch(()=>{}) }
 
 function showDuelView(){
   const inRoom = !!room;
@@ -399,13 +459,21 @@ $('duel-leave').onclick = async () => {
   showDuelView();
 };
 $('duel-start').onclick = () => {
-  const maxR = Math.max(me.round, ...opponents().map(p => +p.presence.round || 0));
-  beginRound(maxR + 1);
+  const opp = opponents(), L = duelLevel;
+  const maxR = Math.max(me.round, ...opp.map(p => +p.presence.round || 0));
+  const wi = pickIndex(L, opp.map(p => bitsToSet(p.presence.seen && p.presence.seen[L])));
+  beginRound(maxR + 1, L, wi, Date.now());
 };
+$('duel-levels').addEventListener('click', e => {
+  const b = e.target.closest('button[data-level]'); if(!b) return;
+  duelLevel = +b.dataset.level; store.set('thermo-duel-level', duelLevel); renderDuel();
+});
+function validWord(L, wi){ return [1,2,3].includes(L) && Number.isInteger(wi) && wi >= 0 && wi < levelList(L).length }
 
-function beginRound(r){
-  me.round = r; me.best = null; me.prog = 0; me.count = 0; me.foundMs = null;
-  duel.game = makeGame(wordFor(code, r)); duel.guesses = []; duel.result = null;
+function beginRound(r, L, wi, startTs){
+  me.round = r; me.level = L; me.wi = wi; me.startTs = startTs; me.best = null; me.prog = 0; me.count = 0; me.foundMs = null;
+  const word = levelList(L)[wi]; markSeen(L, word);
+  duel.game = makeGame(word); duel.guesses = []; duel.result = null;
   duel.phase = 'countdown'; pushPresence(); renderDuel();
   let n = 3; $('duel-count').textContent = n;
   const tick = setInterval(() => {
@@ -418,8 +486,16 @@ function beginRound(r){
 function onPeers(){
   const opp = opponents();
   // follow a round someone else started
-  const maxR = Math.max(0, ...opp.map(p => +p.presence.round || 0));
-  if(maxR > me.round){ beginRound(maxR); return }
+  const lead = opp.filter(p => validWord(+p.presence.level, +p.presence.wi)).sort((a,b) => (+b.presence.round||0) - (+a.presence.round||0))[0];
+  if(lead){
+    const P = lead.presence, r = +P.round || 0;
+    if(r > me.round){ beginRound(r, +P.level, +P.wi, +P.startTs || 0); return }
+    // both started the same round at once: the earliest start wins
+    if(r === me.round && r > 0 && duel.phase !== 'done' && (+P.level !== me.level || +P.wi !== me.wi)
+       && ((+P.startTs||0) < me.startTs || ((+P.startTs||0) === me.startTs && String(P.name) < me.name))){
+      beginRound(r, +P.level, +P.wi, +P.startTs || 0); return
+    }
+  }
   // someone found the word in our round
   if(duel.phase === 'play' || duel.phase === 'countdown'){
     const winner = opp.find(p => +p.presence.round === me.round && typeof p.presence.foundMs === 'number');
@@ -465,13 +541,14 @@ function renderDuel(){
   $('duel-wait').hidden = duel.phase !== 'lobby' && duel.phase !== 'done';
   $('wait-status').textContent = opp ? `${opp.presence.name} est connecté·e. Prêts ?` : 'En attente de ton adversaire…';
   $('duel-start').disabled = !opp;
+  renderLevelPicker($('duel-levels'), duelLevel);
   $('duel-start').textContent = duel.phase === 'done' ? 'Revanche' : 'Lancer la manche';
   // versus
   const v = $('versus');
   v.innerHTML = playerCard(me.name, me, true, true) + (opp ? playerCard(opp.presence.name, opp.presence, false, true) : playerCard('Adversaire', {}, false, false));
   const names = v.querySelectorAll('[data-name]');
   names[0].textContent = me.name + ' (toi)'; names[1].textContent = opp ? opp.presence.name : 'En attente…';
-  $('duel-score').textContent = opp ? `Manches gagnées : ${me.wins} – ${+opp.presence.wins || 0}` : '';
+  $('duel-score').textContent = opp ? `Manches gagnées : ${me.wins} – ${+opp.presence.wins || 0}` + (me.round ? ` · manche ${me.round}, niveau ${me.level}` : '') : '';
   $('duel-count').hidden = duel.phase !== 'countdown';
   $('duel-play').hidden = duel.phase !== 'play' && duel.phase !== 'done';
   $('duel-in').disabled = $('duel-go').disabled = duel.phase !== 'play';
@@ -498,8 +575,7 @@ $('duel-name').value = store.get('thermo-name', '');
 
 load().then(() => {
   $('loading').hidden = true;
-  const saved = store.get('thermo-solo', null);
-  startSolo(saved && saved.key === 'free' ? 'free' : 'daily');
+  startSolo('resume');
   setTab(store.get('thermo-tab', 'solo'));
 }).catch(() => { $('loading').textContent = 'Le dictionnaire n’a pas pu se charger. Recharge la page.' });
 
