@@ -182,42 +182,53 @@ const store = {
 };
 const strip = s => s.normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/œ/g,'oe').replace(/æ/g,'ae');
 
-let LEX, VEC, DIM, NORM, INDEX = new Map(), LOOSE = new Map();
+let LEX, VEC, DIM, NORM, W2, INDEX = new Map(), LOOSE = new Map();
 
 async function load(){
   const [lex, bin] = await Promise.all([
     fetch('lex.json').then(r => r.json()),
-    fetch('vec.bin').then(r => r.arrayBuffer())
+    fetch('vec4.bin').then(r => r.arrayBuffer())
   ]);
-  LEX = lex; DIM = lex.d; VEC = new Int8Array(bin);
-  const n = lex.words.length; NORM = new Float32Array(n);
+  LEX = lex; DIM = lex.d;
+  const n = lex.words.length, raw = new Uint8Array(bin), half = DIM >> 1;
+  VEC = new Int8Array(n * DIM); NORM = new Float32Array(n);
+  W2 = Float32Array.from(lex.scale, s => s * s);
   for(let i=0;i<n;i++){
-    let s=0, o=i*DIM; for(let k=0;k<DIM;k++){ const v=VEC[o+k]; s+=v*v } NORM[i]=Math.sqrt(s)||1;
+    const o = i*DIM, ro = i*half; let s = 0;
+    for(let k=0;k<half;k++){
+      const b = raw[ro+k], a = 2*(b >> 4) - 15, c = 2*(b & 15) - 15;
+      VEC[o+2*k] = a; VEC[o+2*k+1] = c;
+      s += a*a*W2[2*k] + c*c*W2[2*k+1];
+    }
+    NORM[i] = Math.sqrt(s) || 1;
     INDEX.set(lex.words[i], i);
     const l = strip(lex.words[i]); if(!LOOSE.has(l)) LOOSE.set(l, i);
+  }
+  for(const f in lex.forms){
+    const i = lex.forms[f];
+    if(!INDEX.has(f)) INDEX.set(f, i);
+    const l = strip(f); if(!LOOSE.has(l)) LOOSE.set(l, i);
   }
 }
 
 // A "game" = one secret word with its full ranking.
 function makeGame(targetWord){
   const t = INDEX.get(targetWord), n = LEX.words.length, to = t*DIM;
-  const sims = new Float32Array(n);
+  const tw = new Float32Array(DIM); for(let k=0;k<DIM;k++) tw[k] = VEC[to+k]*W2[k];
+  const sims = new Float32Array(n), nt = NORM[t];
   for(let i=0;i<n;i++){
-    let s=0, o=i*DIM; for(let k=0;k<DIM;k++) s += VEC[o+k]*VEC[to+k];
-    sims[i] = s/(NORM[i]*NORM[t]);
+    let s=0; const o=i*DIM; for(let k=0;k<DIM;k++) s += VEC[o+k]*tw[k];
+    sims[i] = s/(NORM[i]*nt);
   }
-  const order = [];
-  for(let i=0;i<n;i++) if(!LEX.lem || LEX.lem[i] < 0) order.push(i);
-  order.sort((a,b) => sims[b]-sims[a]);
+  const order = Array.from({length:n}, (_, i) => i).sort((a,b) => sims[b]-sims[a]);
   const rank = new Map(); for(let r=0;r<1000;r++) rank.set(order[r], 1000-r);
   return { target: targetWord, t, sims, rank };
 }
 function lookup(raw){
   const w = raw.trim().toLowerCase().replace(/[’']/g,"'");
   if(!w) return null;
-  let i = INDEX.has(w) ? INDEX.get(w) : (LOOSE.has(strip(w)) ? LOOSE.get(strip(w)) : -1);
-  if(i >= 0 && LEX.lem && LEX.lem[i] >= 0) i = LEX.lem[i];
-  return i;
+  if(INDEX.has(w)) return INDEX.get(w);
+  const l = strip(w); return LOOSE.has(l) ? LOOSE.get(l) : -1;
 }
 function score(game, i){
   const temp = Math.round(game.sims[i]*10000)/100;

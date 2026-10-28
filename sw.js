@@ -1,5 +1,5 @@
-const V='thermomot-v2';
-const SHELL=['./','index.html','lex.json','vec.bin','mqtt.min.js','manifest.webmanifest','icon-192.png','icon-180.png'];
+const V='thermomot-v3';
+const SHELL=['./','index.html','lex.json','vec4.bin','mqtt.min.js','manifest.webmanifest','icon-192.png','icon-180.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(V).then(c=>c.addAll(SHELL)));self.skipWaiting()});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==V).map(k=>caches.delete(k)))));self.clients.claim()});
 self.addEventListener('fetch',e=>{
