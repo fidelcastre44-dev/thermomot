@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Thermomot</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Thermomot">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#eef2f3" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#10181e" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<script src="mqtt.min.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Outfit:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{-webkit-text-size-adjust:100%}
+body{margin:0}
+[hidden]{display:none!important}
+/* Layout: one narrow column, a sticky guess bar, the list of guesses read like a thermometer log */
+:root{
+  --bg:#eef2f3; --surface:#ffffff; --ink:#15212a; --muted:#5d6d78; --line:#d5dee2;
+  --cold:#3b7fb8; --warm:#e0892b; --hot:#d2381f; --win:#1f9a6b;
+  --f-display:"Unbounded",system-ui,sans-serif;
+  --f-body:"Outfit",system-ui,-apple-system,sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#10181e; --surface:#18232b; --ink:#e6eef2; --muted:#8fa2ad; --line:#2a3842;
+  --cold:#6aa8dc; --warm:#f0a24d; --hot:#ff6a4d; --win:#3cc893; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#10181e; --surface:#18232b; --ink:#e6eef2; --muted:#8fa2ad; --line:#2a3842;
+  --cold:#6aa8dc; --warm:#f0a24d; --hot:#ff6a4d; --win:#3cc893; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:16px;line-height:1.45;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:12px 40px}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+.wrap{max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+h1{font-family:var(--f-display);font-weight:700;font-size:1.6rem;margin:0;letter-spacing:-.02em}
+h1 span{color:var(--hot)}
+.tabs{display:flex;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:3px}
+.tabs button{border:0;background:none;color:var(--muted);font:600 .9rem var(--f-body);padding:6px 14px;border-radius:999px;cursor:pointer}
+.tabs button[aria-selected="true"]{background:var(--ink);color:var(--bg)}
+.sub{color:var(--muted);font-size:.92rem;margin:0}
+.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);padding-block:6px;display:flex;gap:8px}
+input[type=text]{flex:1;min-width:0;font:500 1.1rem var(--f-body);padding:12px 14px;border:1.5px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink)}
+input[type=text]:focus{outline:none;border-color:var(--ink)}
+.btn{font:600 1rem var(--f-body);border:0;border-radius:12px;padding:12px 18px;background:var(--ink);color:var(--bg);cursor:pointer}
+.btn.ghost{background:transparent;color:var(--ink);border:1.5px solid var(--line)}
+.btn:disabled{opacity:.4;cursor:default}
+.btn:focus-visible,.tabs button:focus-visible,input:focus-visible{outline:2px solid var(--warm);outline-offset:2px}
+.msg{min-height:1.3em;font-size:.92rem;color:var(--muted);margin:-6px 0 0}
+.msg.err{color:var(--hot)}
+.list{display:flex;flex-direction:column;gap:4px}
+.row{display:grid;grid-template-columns:2.4rem 1fr 4.6rem 1.6rem 6.5rem;align-items:center;gap:8px;padding:8px 10px;border-radius:10px;background:var(--surface);font-variant-numeric:tabular-nums}
+.row.last{outline:2px solid var(--ink)}
+.row.found{background:var(--win);color:#fff}
+.row .n{font:400 .78rem var(--f-mono);color:var(--muted)}
+.row.found .n{color:#fff}
+.row .w{font-weight:600;overflow-wrap:anywhere;min-width:0}
+.row .t{font:600 .95rem var(--f-mono);text-align:right}
+.row .e{text-align:center}
+.prog{display:flex;align-items:center;gap:6px;font:400 .75rem var(--f-mono);color:var(--muted)}
+.prog i{flex:1;height:6px;border-radius:3px;background:var(--line);position:relative;overflow:hidden}
+.prog i b{position:absolute;inset:0 auto 0 0;background:linear-gradient(90deg,var(--warm),var(--hot))}
+.divider{font:400 .75rem var(--f-mono);color:var(--muted);text-transform:uppercase;letter-spacing:.08em;padding:6px 2px 0}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:18px;display:flex;flex-direction:column;gap:12px}
+.panel h2{font-family:var(--f-display);font-size:1.05rem;margin:0;font-weight:500}
+.inline{display:flex;gap:8px;flex-wrap:wrap}
+.inline > *{flex:1 1 140px}
+.code{font:700 2.2rem var(--f-mono);letter-spacing:.3em;text-align:center}
+.versus{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.player{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.player.me{border-color:var(--ink)}
+.player .nm{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.player .big{font:600 1.5rem var(--f-mono)}
+.player .meta{font-size:.8rem;color:var(--muted)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-right:6px;vertical-align:middle}
+.dot.on{background:var(--win)}
+.banner{border-radius:16px;padding:18px;text-align:center;display:flex;flex-direction:column;gap:6px;align-items:center}
+.banner.win{background:var(--win);color:#fff}
+.banner.lose{background:var(--hot);color:#fff}
+.banner.neutral{background:var(--surface);border:1px solid var(--line)}
+.banner strong{font-family:var(--f-display);font-size:1.3rem}
+.countdown{font:700 4rem var(--f-display);text-align:center;color:var(--hot);padding:30px 0}
+.score{font:600 .9rem var(--f-mono);color:var(--muted);text-align:center}
+.loading{color:var(--muted);text-align:center;padding:40px 0}
+.legend{font-size:.82rem;color:var(--muted)}
+@media (max-width:420px){.row{grid-template-columns:2rem 1fr 4.2rem 1.4rem 4.6rem;gap:6px;padding:8px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+
+<div class="wrap">
+  <header>
+    <h1>Thermo<span>mot</span></h1>
+    <div class="tabs" role="tablist">
+      <button id="tab-solo" role="tab" aria-selected="true">Mot du jour</button>
+      <button id="tab-duel" role="tab" aria-selected="false">Duel</button>
+    </div>
+  </header>
+
+  <div id="loading" class="loading">Chargement du dictionnaire…</div>
+
+  <!-- SOLO -->
+  <section id="solo" hidden>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <p class="sub" id="solo-sub"></p>
+      <div class="bar">
+        <input type="text" id="solo-in" placeholder="Tape un mot…" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go">
+        <button class="btn" id="solo-go">Tester</button>
+      </div>
+      <p class="msg" id="solo-msg"></p>
+      <div id="solo-banner"></div>
+      <div class="list" id="solo-list"></div>
+      <div class="inline">
+        <button class="btn ghost" id="solo-random">Partie libre</button>
+        <button class="btn ghost" id="solo-giveup">Abandonner</button>
+      </div>
+      <p class="legend">La température mesure la proximité de sens avec le mot secret. La jauge en ‰ s'affiche quand ton mot fait partie des 1000 plus proches : 1000‰, c'est le mot lui-même.</p>
+    </div>
+  </section>
+
+  <!-- DUEL -->
+  <section id="duel" hidden>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div id="duel-off" class="panel" hidden>
+        <h2>Duel indisponible ici</h2>
+        <p class="sub">Le duel a besoin d’une connexion internet. Vérifie ta connexion puis recharge l’app.</p>
+      </div>
+
+      <div id="duel-lobby" class="panel" hidden>
+        <h2>Défie quelqu'un en direct</h2>
+        <p class="sub">Vous jouez le même mot en même temps. Le premier qui le trouve gagne la manche.</p>
+        <input type="text" id="duel-name" placeholder="Ton pseudo" maxlength="16" autocomplete="off">
+        <button class="btn" id="duel-create">Créer un duel</button>
+        <div class="divider">ou rejoindre</div>
+        <div class="bar" style="position:static;padding:0">
+          <input type="text" id="duel-code" placeholder="Code (4 lettres)" maxlength="4" autocomplete="off" autocapitalize="characters" style="text-transform:uppercase">
+          <button class="btn ghost" id="duel-join">Rejoindre</button>
+        </div>
+        <p class="msg" id="lobby-msg"></p>
+      </div>
+
+      <div id="duel-room" hidden style="display:flex;flex-direction:column;gap:12px">
+        <div class="panel" id="duel-wait">
+          <p class="sub" style="text-align:center">Code du duel, à donner à ton adversaire</p>
+          <div class="code" id="duel-code-show"></div>
+          <p class="sub" id="wait-status" style="text-align:center"></p>
+          <button class="btn" id="duel-start" disabled>Lancer la manche</button>
+          <button class="btn ghost" id="duel-leave">Quitter</button>
+        </div>
+        <div class="versus" id="versus"></div>
+        <div class="score" id="duel-score"></div>
+        <div id="duel-count" class="countdown" hidden></div>
+        <div id="duel-banner"></div>
+        <div id="duel-play" hidden style="display:flex;flex-direction:column;gap:12px">
+          <div class="bar">
+            <input type="text" id="duel-in" placeholder="Tape un mot…" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go">
+            <button class="btn" id="duel-go">Tester</button>
+          </div>
+          <p class="msg" id="duel-msg"></p>
+          <div class="list" id="duel-list"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d }catch(e){ return d } },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)) }catch(e){} }
+};
+const strip = s => s.normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/œ/g,'oe').replace(/æ/g,'ae');
+
+let LEX, VEC, DIM, NORM, INDEX = new Map(), LOOSE = new Map();
+
+async function load(){
+  const [lex, bin] = await Promise.all([
+    fetch('lex.json').then(r => r.json()),
+    fetch('vec.bin').then(r => r.arrayBuffer())
+  ]);
+  LEX = lex; DIM = lex.d; VEC = new Int8Array(bin);
+  const n = lex.words.length; NORM = new Float32Array(n);
+  for(let i=0;i<n;i++){
+    let s=0, o=i*DIM; for(let k=0;k<DIM;k++){ const v=VEC[o+k]; s+=v*v } NORM[i]=Math.sqrt(s)||1;
+    INDEX.set(lex.words[i], i);
+    const l = strip(lex.words[i]); if(!LOOSE.has(l)) LOOSE.set(l, i);
+  }
+}
+
+// A "game" = one secret word with its full ranking.
+function makeGame(targetWord){
+  const t = INDEX.get(targetWord), n = LEX.words.length, to = t*DIM;
+  const sims = new Float32Array(n);
+  for(let i=0;i<n;i++){
+    let s=0, o=i*DIM; for(let k=0;k<DIM;k++) s += VEC[o+k]*VEC[to+k];
+    sims[i] = s/(NORM[i]*NORM[t]);
+  }
+  const order = Array.from({length:n}, (_, i) => i).sort((a,b) => sims[b]-sims[a]);
+  const rank = new Map(); for(let r=0;r<1000;r++) rank.set(order[r], 1000-r);
+  return { target: targetWord, t, sims, rank };
+}
+function lookup(raw){
+  const w = raw.trim().toLowerCase().replace(/[’']/g,"'");
+  if(!w) return null;
+  if(INDEX.has(w)) return INDEX.get(w);
+  const l = strip(w); return LOOSE.has(l) ? LOOSE.get(l) : -1;
+}
+function score(game, i){
+  const temp = Math.round(game.sims[i]*10000)/100;
+  const prog = game.rank.get(i) || 0;
+  return { word: LEX.words[i], temp, prog, found: i === game.t };
+}
+function emoji(s){
+  if(s.found) return '😱';
+  if(s.prog >= 999) return '🔥';
+  if(s.prog >= 990) return '🥵';
+  if(s.prog >= 900) return '😎';
+  if(s.prog > 0) return '🙂';
+  return s.temp < 0 ? '🧊' : '🥶';
+}
+function rowHTML(s, n, cls=''){
+  const p = s.prog ? `<span class="prog"><i><b style="width:${s.prog/10}%"></b></i>${s.prog}</span>` : '<span class="prog"></span>';
+  return `<div class="row ${cls} ${s.found?'found':''}"><span class="n">${n}</span><span class="w"></span><span class="t">${s.temp.toFixed(2)}°</span><span class="e">${emoji(s)}</span>${p}</div>`;
+}
+function renderList(el, guesses){
+  // guesses: [{word,temp,prog,found,n}], newest last
+  if(!guesses.length){ el.innerHTML = ''; return }
+  const last = guesses[guesses.length-1];
+  const sorted = [...guesses].sort((a,b) => b.temp - a.temp);
+  let html = rowHTML(last, last.n, 'last') + '<div class="divider">Tes essais, du plus chaud au plus froid</div>';
+  html += sorted.map(g => rowHTML(g, g.n)).join('');
+  el.innerHTML = html;
+  const ws = el.querySelectorAll('.w'); const all = [last, ...sorted];
+  ws.forEach((node, k) => node.textContent = all[k].word);
+}
+function guessInto(game, guesses, raw, msgEl){
+  const i = lookup(raw);
+  msgEl.classList.remove('err');
+  if(i === null) return null;
+  if(i < 0){ msgEl.textContent = `Je ne connais pas « ${raw.trim()} ».`; msgEl.classList.add('err'); return null }
+  const word = LEX.words[i];
+  const prev = guesses.find(g => g.word === word);
+  if(prev){ msgEl.textContent = `« ${word} » déjà essayé : ${prev.temp.toFixed(2)}°`; return null }
+  const s = { ...score(game, i), n: guesses.length + 1 };
+  guesses.push(s);
+  msgEl.textContent = '';
+  return s;
+}
+
+/* ---------- SOLO ---------- */
+const EPOCH = Date.UTC(2026, 9, 28);
+function todayKey(){ const d = new Date(); return `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}` }
+function dayIndex(){ const d = new Date(); return Math.floor((Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - EPOCH)/86400000) }
+let solo = null;
+function startSolo(mode){
+  let word, label;
+  if(mode === 'daily'){
+    const idx = ((dayIndex() % LEX.targets.length) + LEX.targets.length) % LEX.targets.length;
+    word = LEX.targets[idx]; label = `Mot du jour n°${dayIndex()+1}`;
+  } else {
+    word = LEX.targets[Math.floor(Math.random()*LEX.targets.length)]; label = 'Partie libre';
+  }
+  const saved = store.get('thermo-solo', null);
+  const key = mode === 'daily' ? todayKey() : 'free';
+  solo = { mode, key, label, game: makeGame(mode==='free' && saved && saved.key==='free' && saved.word ? saved.word : word), guesses: [], over: false };
+  if(saved && saved.key === key && saved.word === solo.game.target){
+    for(const w of saved.words){ const i = INDEX.get(w); if(i !== undefined) solo.guesses.push({ ...score(solo.game, i), n: solo.guesses.length+1 }) }
+    solo.over = !!saved.over || solo.guesses.some(g => g.found);
+  }
+  renderSolo();
+}
+function saveSolo(){ store.set('thermo-solo', { key: solo.key, word: solo.game.target, words: solo.guesses.map(g => g.word), over: solo.over }) }
+function renderSolo(){
+  $('solo-sub').textContent = `${solo.label} · ${solo.guesses.length} essai${solo.guesses.length>1?'s':''}`;
+  renderList($('solo-list'), solo.guesses);
+  const b = $('solo-banner'); b.innerHTML = '';
+  const found = solo.guesses.find(g => g.found);
+  if(solo.over){
+    b.innerHTML = `<div class="banner ${found?'win':'neutral'}"><strong></strong><span></span></div>`;
+    b.querySelector('strong').textContent = found ? `Trouvé : ${solo.game.target}` : `Le mot était : ${solo.game.target}`;
+    b.querySelector('span').textContent = found ? `en ${found.n} essai${found.n>1?'s':''}` : 'Retente ta chance avec une partie libre.';
+  }
+  $('solo-in').disabled = $('solo-go').disabled = $('solo-giveup').disabled = solo.over;
+}
+function soloGuess(){
+  if(solo.over) return;
+  const s = guessInto(solo.game, solo.guesses, $('solo-in').value, $('solo-msg'));
+  if(s){ $('solo-in').value = ''; if(s.found) solo.over = true; saveSolo(); renderSolo() }
+  $('solo-in').focus();
+}
+$('solo-go').onclick = soloGuess;
+$('solo-in').addEventListener('keydown', e => { if(e.key === 'Enter') soloGuess() });
+$('solo-random').onclick = () => { store.set('thermo-solo', null); startSolo('free') };
+let giveupArmed = false;
+$('solo-giveup').onclick = () => {
+  if(!giveupArmed){ giveupArmed = true; $('solo-giveup').textContent = 'Sûr ? Touche encore'; setTimeout(() => { giveupArmed = false; $('solo-giveup').textContent = 'Abandonner' }, 3000); return }
+  giveupArmed = false; $('solo-giveup').textContent = 'Abandonner';
+  solo.over = true; saveSolo(); renderSolo();
+};
+
+
+/* ---------- live connection (public MQTT broker) ---------- */
+function mqttRoomApi(){
+  if(!window.mqtt) return null;
+  return { join(name){
+    const peer = Math.random().toString(36).slice(2,10);
+    const base = 'thermomot/v1/' + name + '/p/';
+    const map = new Map(); const handlers = new Set();
+    let mine = {}, frozen = [], queued = false;
+    const flush = () => { queued = false; frozen = Object.freeze([...map.values()]); handlers.forEach(h => h({ peers: frozen })) };
+    const changed = () => { if(!queued){ queued = true; setTimeout(flush, 0) } };
+    const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
+      clientId: 'tm_' + peer, clean: true, keepalive: 20, reconnectPeriod: 2000, connectTimeout: 8000,
+      will: { topic: base + peer, payload: '', retain: true, qos: 1 }
+    });
+    map.set(peer, { peer, isMe: true, kind: 'viewer', presence: mine });
+    const send = () => { if(client.connected) client.publish(base + peer, JSON.stringify(mine), { retain: true, qos: 1 }) };
+    client.on('connect', () => { client.subscribe(base + '+', { qos: 1 }); send() });
+    client.on('message', (topic, buf) => {
+      const id = topic.slice(base.length); if(id === peer) return;
+      const s = buf.toString();
+      if(!s) map.delete(id);
+      else { try { const p = JSON.parse(s); if(p && typeof p === 'object') map.set(id, { peer: id, isMe: false, kind: 'viewer', presence: p }) } catch(e){} }
+      changed();
+    });
+    return {
+      presence(patch){ mine = { ...mine, ...patch }; map.set(peer, { peer, isMe: true, kind: 'viewer', presence: mine }); send(); changed(); return Promise.resolve() },
+      peers(){ return frozen },
+      onPeers(h){ handlers.add(h); setTimeout(() => h({ peers: frozen }), 0); return () => handlers.delete(h) },
+      leave(){ return new Promise(r => { try { client.publish(base + peer, '', { retain: true, qos: 1 }, () => client.end(false, {}, r)) } catch(e){ r() } }) }
+    };
+  }};
+}
+
+/* ---------- DUEL ---------- */
+let roomChecked = false, roomApi = null, room = null, code = '', me = { name:'', round:0, best:null, prog:0, count:0, foundMs:null, wins:0 };
+let duel = { game:null, guesses:[], phase:'lobby', startedAt:0, result:null, unsub:null };
+function hash(s){ let h = 2166136261; for(const c of s){ h ^= c.charCodeAt(0); h = Math.imul(h, 16777619) } return h >>> 0 }
+function wordFor(c, r){ return LEX.targets[hash(c + ':' + r) % LEX.targets.length] }
+function opponents(){ return room ? room.peers().filter(p => !p.isMe && p.kind === 'viewer' && p.presence && p.presence.name && Date.now() - (+p.presence.ts || 0) < 120000) : [] }
+function pushPresence(){ if(room) room.presence({ ts: Date.now(), name: me.name, round: me.round, best: me.best, prog: me.prog, count: me.count, foundMs: me.foundMs, wins: me.wins }).catch(()=>{}) }
+
+function showDuelView(){
+  const inRoom = !!room;
+  $('duel-lobby').hidden = inRoom || !roomApi;
+  $('duel-off').hidden = !roomChecked || !!roomApi;
+  $('duel-room').hidden = !inRoom;
+}
+async function enterRoom(c){
+  const name = $('duel-name').value.trim();
+  if(!name){ $('lobby-msg').textContent = 'Choisis un pseudo avant.'; $('lobby-msg').classList.add('err'); return }
+  me.name = name; store.set('thermo-name', name);
+  code = c; me.round = 0; me.wins = 0; me.best = null; me.prog = 0; me.count = 0; me.foundMs = null;
+  try { room = roomApi.join('thermomot-' + code) } catch(e){ $('lobby-msg').textContent = 'Connexion impossible, réessaie.'; return }
+  duel.phase = 'lobby';
+  duel.unsub = room.onPeers(onPeers);
+  pushPresence();
+  $('duel-code-show').textContent = code;
+  showDuelView(); renderDuel();
+}
+$('duel-create').onclick = () => {
+  const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; let c = ''; for(let i=0;i<4;i++) c += A[Math.floor(Math.random()*A.length)];
+  enterRoom(c);
+};
+$('duel-join').onclick = () => {
+  const c = $('duel-code').value.trim().toUpperCase();
+  if(!/^[A-Z]{4}$/.test(c)){ $('lobby-msg').textContent = 'Le code fait 4 lettres.'; $('lobby-msg').classList.add('err'); return }
+  enterRoom(c);
+};
+$('duel-leave').onclick = async () => {
+  if(duel.unsub) duel.unsub();
+  try{ await room.leave() }catch(e){}
+  room = null; duel.phase = 'lobby'; duel.game = null; duel.guesses = [];
+  showDuelView();
+};
+$('duel-start').onclick = () => {
+  const maxR = Math.max(me.round, ...opponents().map(p => +p.presence.round || 0));
+  beginRound(maxR + 1);
+};
+
+function beginRound(r){
+  me.round = r; me.best = null; me.prog = 0; me.count = 0; me.foundMs = null;
+  duel.game = makeGame(wordFor(code, r)); duel.guesses = []; duel.result = null;
+  duel.phase = 'countdown'; pushPresence(); renderDuel();
+  let n = 3; $('duel-count').textContent = n;
+  const tick = setInterval(() => {
+    n--; if(n > 0){ $('duel-count').textContent = n; return }
+    clearInterval(tick);
+    if(duel.phase !== 'countdown' || me.round !== r) return;
+    duel.phase = 'play'; duel.startedAt = performance.now(); renderDuel(); $('duel-in').focus();
+  }, 800);
+}
+function onPeers(){
+  const opp = opponents();
+  // follow a round someone else started
+  const maxR = Math.max(0, ...opp.map(p => +p.presence.round || 0));
+  if(maxR > me.round){ beginRound(maxR); return }
+  // someone found the word in our round
+  if(duel.phase === 'play' || duel.phase === 'countdown'){
+    const winner = opp.find(p => +p.presence.round === me.round && typeof p.presence.foundMs === 'number');
+    if(winner) endRound(false, winner.presence.name);
+  }
+  renderDuel();
+}
+function endRound(iWon, otherName){
+  if(duel.phase === 'done') return;
+  duel.phase = 'done';
+  duel.result = { iWon, otherName, word: duel.game.target, count: duel.guesses.length };
+  if(iWon){ me.wins++; pushPresence() }
+  renderDuel();
+}
+function duelGuess(){
+  if(duel.phase !== 'play') return;
+  const s = guessInto(duel.game, duel.guesses, $('duel-in').value, $('duel-msg'));
+  if(!s){ $('duel-in').focus(); return }
+  $('duel-in').value = '';
+  me.count = duel.guesses.length;
+  if(me.best === null || s.temp > me.best){ me.best = s.temp }
+  me.prog = Math.max(me.prog, s.prog);
+  if(s.found){ me.foundMs = Math.round(performance.now() - duel.startedAt); pushPresence(); endRound(true) }
+  else { pushPresence(); renderDuel() }
+  $('duel-in').focus();
+}
+$('duel-go').onclick = duelGuess;
+$('duel-in').addEventListener('keydown', e => { if(e.key === 'Enter') duelGuess() });
+
+function playerCard(name, p, isMe, online){
+  const best = p.best === null || p.best === undefined ? '—' : `${(+p.best).toFixed(2)}°`;
+  const prog = +p.prog || 0;
+  return `<div class="player ${isMe?'me':''}">
+    <div class="nm"><span class="dot ${online?'on':''}"></span><span data-name></span></div>
+    <div class="big">${best}</div>
+    <span class="prog"><i><b style="width:${prog/10}%"></b></i>${prog ? prog+'‰' : ''}</span>
+    <div class="meta">${+p.count||0} essai${(+p.count||0)>1?'s':''}</div>
+  </div>`;
+}
+function renderDuel(){
+  if(!room) return;
+  const opp = opponents()[0];
+  $('duel-wait').hidden = duel.phase !== 'lobby' && duel.phase !== 'done';
+  $('wait-status').textContent = opp ? `${opp.presence.name} est connecté·e. Prêts ?` : 'En attente de ton adversaire…';
+  $('duel-start').disabled = !opp;
+  $('duel-start').textContent = duel.phase === 'done' ? 'Revanche' : 'Lancer la manche';
+  // versus
+  const v = $('versus');
+  v.innerHTML = playerCard(me.name, me, true, true) + (opp ? playerCard(opp.presence.name, opp.presence, false, true) : playerCard('Adversaire', {}, false, false));
+  const names = v.querySelectorAll('[data-name]');
+  names[0].textContent = me.name + ' (toi)'; names[1].textContent = opp ? opp.presence.name : 'En attente…';
+  $('duel-score').textContent = opp ? `Manches gagnées : ${me.wins} – ${+opp.presence.wins || 0}` : '';
+  $('duel-count').hidden = duel.phase !== 'countdown';
+  $('duel-play').hidden = duel.phase !== 'play' && duel.phase !== 'done';
+  $('duel-in').disabled = $('duel-go').disabled = duel.phase !== 'play';
+  renderList($('duel-list'), duel.guesses);
+  const b = $('duel-banner'); b.innerHTML = '';
+  if(duel.phase === 'done' && duel.result){
+    const r = duel.result;
+    b.innerHTML = `<div class="banner ${r.iWon?'win':'lose'}"><strong></strong><span></span></div>`;
+    b.querySelector('strong').textContent = r.iWon ? 'Tu es trop fort·e !' : `${r.otherName} est trop fort·e`;
+    b.querySelector('span').textContent = `Le mot était « ${r.word} »` + (r.iWon ? ` · trouvé en ${r.count} essai${r.count>1?'s':''}` : '');
+  }
+}
+
+/* ---------- tabs & boot ---------- */
+function setTab(t){
+  $('tab-solo').setAttribute('aria-selected', t === 'solo'); $('tab-duel').setAttribute('aria-selected', t === 'duel');
+  $('solo').hidden = t !== 'solo'; $('duel').hidden = t !== 'duel';
+  if(t === 'duel') showDuelView();
+  store.set('thermo-tab', t);
+}
+$('tab-solo').onclick = () => setTab('solo');
+$('tab-duel').onclick = () => setTab('duel');
+$('duel-name').value = store.get('thermo-name', '');
+
+load().then(() => {
+  $('loading').hidden = true;
+  const saved = store.get('thermo-solo', null);
+  startSolo(saved && saved.key === 'free' ? 'free' : 'daily');
+  setTab(store.get('thermo-tab', 'solo'));
+}).catch(() => { $('loading').textContent = 'Le dictionnaire n’a pas pu se charger. Recharge la page.' });
+
+roomApi = mqttRoomApi(); roomChecked = true;
+setInterval(() => { if(room) pushPresence() }, 45000);
+setInterval(() => { if(room) renderDuel() }, 15000);
+if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+showDuelView();
+})();
+</script>
+
+</body>
+</html>
